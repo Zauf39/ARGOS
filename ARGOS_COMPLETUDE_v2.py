@@ -403,7 +403,7 @@ def traitement_otdr(indice_ref, impulsion_ref, sor_files):
                 'distance': 'Distance',
                 'slope': 'Pente',
                 'splice loss': 'Atténuation(dB)',
-                'type': "Type evenements"
+                'type': "Type d'évenements"
             }, errors='ignore')
 
             remplacement_types = {
@@ -418,7 +418,91 @@ def traitement_otdr(indice_ref, impulsion_ref, sor_files):
                 r'0A9999OO.*': 'Epissure',
                 r'0O9999LS.*': 'Epissure'
             }
-            if "Type evenements" in df_events.columns:
-                df_events["Type evenements"] = df_events["Type evenements"].replace(remplacement_types, regex=True)
+            if "Type d'évenements" in df_events.columns:
+                df_events["Type d'évenements"] = df_events["Type d'évenements"].replace(remplacement_types, regex=True)
             if "Type de ROP" in df_events.columns:
-                df_events = df_events.dro
+                df_events = df_events.drop(columns=["Type de ROP"])
+            if not df_events.empty:
+                cols = ['Fichier', 'MétaNommage', 'N° évenement'] + [
+                    col for col in df_events.columns if col not in ['Fichier', 'MétaNommage', 'N° évenement']
+                ]
+                df_events = df_events[cols]
+            if "Type d'évenements" in df_events.columns and "Distance" in df_events.columns:
+                last_fin_de_fibre = (
+                    df_events[df_events["Type d'évenements"] == "Fin de fibre"]
+                    .groupby('Fichier')['Distance']
+                    .last()
+                    .reset_index()
+                    .rename(columns={'Distance': 'Distance Totale(km)_new'})
+                )
+                df_params = df_params.merge(last_fin_de_fibre, on='Fichier', how='left')
+                df_params['Distance Totale(km)'] = df_params['Distance Totale(km)_new']
+                df_params = df_params.drop(columns=['Distance Totale(km)_new'])
+
+            df_hors_normes = df_events[
+                (df_events["Type d'évenements"] == "Epissure") &
+                (pd.to_numeric(df_events["Atténuation(dB)"], errors='coerce') >= 0.3)
+            ].copy()
+            df_hors_normes['Anomalie'] = (
+                ((df_hors_normes["Type d'évenements"] == "Epissure") &
+                (pd.to_numeric(df_hors_normes["Atténuation(dB)"], errors='coerce') >= 0.3))
+                .map({True: "Epissure NOK", False: ""})
+            )
+
+            step += 1
+            progress_bar.progress(step / total_steps)
+            status_text.info("Contrôle Lambda/Indice de Réfraction...")
+            df_hors_normes = controle_lambda_indice(df_params, df_hors_normes)
+            step += 1
+            progress_bar.progress(step / total_steps)
+            status_text.info("Contrôle longueurs fibres (même boîte)...")
+            df_hors_normes = controle_longueur_fibres(df_params, df_hors_normes, tolerance_m=15)
+            step += 1
+            progress_bar.progress(step / total_steps)
+            status_text.info("Contrôle des autres paramètres...")
+            df_hors_normes = controle_parametres(df_params, df_hors_normes, "1.4675", "30")
+            step += 1
+            progress_bar.progress(step / total_steps)
+            status_text.info("Analyse temporelle des fichiers...")
+            df_hors_normes = analyse_temps_mesures(df_params, df_hors_normes)
+            step += 1
+            progress_bar.progress(step / total_steps)
+            status_text.info("Analyse des courbes en doublons...")
+            df_hors_normes = analyser_doublons_courbes(df_params, df_hors_normes)
+            step += 1
+            progress_bar.progress(step / total_steps)
+            status_text.info("Vérification du nommage des courbes...")
+            df_hors_normes = analyser_nommage_courbes(df_params, df_hors_normes)
+            step += 1
+            progress_bar.progress(step / total_steps)
+            status_text.info("Export du rapport Excel...")
+
+            excel_output_path = os.path.join(temp_dir, 'rapport_otdr_final.xlsx')
+            with pd.ExcelWriter(excel_output_path, engine='openpyxl') as writer:
+                df_params.to_excel(writer, sheet_name='Parametres OTDR', index=False)
+                df_events.to_excel(writer, sheet_name='Evenements', index=False)
+                df_hors_normes.to_excel(writer, sheet_name='Hors Normes', index=False)
+                wb = load_workbook(excel_output_path)
+                for ws in wb.worksheets:
+                    for column_cells in ws.columns:
+                        length = max(len(str(cell.value)) if cell.value is not None else 0 for cell in column_cells)
+                        ws.column_dimensions[column_cells[0].column_letter].width = length + 2
+                wb.save(excel_output_path)
+            step += 1
+            progress_bar.progress(step / total_steps)
+            status_text.success("Traitement terminé !")
+
+            with open(excel_output_path, "rb") as f:
+                st.download_button("Télécharger le rapport Excel", f, file_name="rapport_otdr_final.xlsx")
+    except Exception as e:
+        st.error(f"Erreur inattendue : {e}")
+
+def main():
+    st.title("Analyse OTDR - Version Streamlit")
+    st.write("Déposez vos fichiers .sor pour lancer l'analyse.")
+    sor_files = st.file_uploader("Sélectionner les fichiers .sor", accept_multiple_files=True, type="sor")
+    if sor_files and st.button("Lancer l'analyse"):
+        traitement_otdr("1.4675", "30", sor_files)
+
+if __name__ == "__main__":
+    main()
