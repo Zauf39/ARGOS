@@ -259,7 +259,6 @@ def analyser_nommage_courbes(df_params, df_hors_normes):
     return df_hors_normes
 
 def traitement_otdr(indice_ref, impulsion_ref, sor_files):
-    # Affichage de la progression
     progress_bar = st.progress(0)
     status_text = st.empty()
     try:
@@ -267,13 +266,11 @@ def traitement_otdr(indice_ref, impulsion_ref, sor_files):
             st.error("Aucun fichier sélectionné.")
             return
 
-        # Création d'un dossier temporaire
         temp_dir = os.path.dirname(sor_files[0].name)
         nb_fichiers = len(sor_files)
         total_steps = nb_fichiers + 8
         step = 0
 
-        # Sauvegarde des fichiers uploadés
         sor_file_paths = []
         for uploaded_file in sor_files:
             file_path = os.path.join(temp_dir, uploaded_file.name)
