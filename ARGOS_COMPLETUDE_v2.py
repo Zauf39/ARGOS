@@ -5,6 +5,9 @@ import pandas as pd
 import re
 from openpyxl import load_workbook
 import streamlit as st
+import tempfile
+import sys
+import subprocess
 
 def flatten_json(y):
     out = {}
@@ -264,225 +267,223 @@ def traitement_otdr(indice_ref, impulsion_ref, sor_files):
             st.error("Aucun fichier sélectionné.")
             return
 
-        temp_dir = os.path.dirname(sor_files[0].name)
-        nb_fichiers = len(sor_files)
-        total_steps = nb_fichiers + 8
-        step = 0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            nb_fichiers = len(sor_files)
+            total_steps = nb_fichiers + 8
+            step = 0
 
-        sor_file_paths = []
-        for uploaded_file in sor_files:
-            file_path = os.path.join(temp_dir, uploaded_file.name)
-            with open(file_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-            sor_file_paths.append(file_path)
+            sor_file_paths = []
+            for uploaded_file in sor_files:
+                file_path = os.path.join(temp_dir, uploaded_file.name)
+                with open(file_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+                sor_file_paths.append(file_path)
 
-        status_text.info("Conversion des fichiers .sor...")
-        import sys
-        flags = 0
-        if sys.platform == "win32":
-            flags = 0x08000000  # subprocess.CREATE_NO_WINDOW
+            status_text.info("Conversion des fichiers .sor...")
+            flags = 0
+            if sys.platform == "win32":
+                flags = 0x08000000  # subprocess.CREATE_NO_WINDOW
 
-        for i, sor_file in enumerate(sor_file_paths):
-            sor_filename = os.path.basename(sor_file)
-            status_text.info(f"Conversion : {sor_filename}")
-            try:
-                import subprocess
-                subprocess.run(['pyotdr', sor_filename], cwd=temp_dir, check=True, creationflags=flags)
-            except Exception as e:
-                st.error(f"❌ Erreur sur {sor_filename} : {e}")
+            for i, sor_file in enumerate(sor_file_paths):
+                sor_filename = os.path.basename(sor_file)
+                status_text.info(f"Conversion : {sor_filename}")
+                try:
+                    subprocess.run(['pyotdr', sor_filename], cwd=temp_dir, check=True, creationflags=flags)
+                except Exception as e:
+                    st.error(f"❌ Erreur sur {sor_filename} : {e}")
+                step += 1
+                progress_bar.progress(step / total_steps)
+
+            status_text.info("Analyse des fichiers ...")
+            json_files = [f for f in os.listdir(temp_dir) if f.lower().endswith('.json')]
+            all_params = []
+            all_events = []
+
+            colonnes_a_supprimer_params = [
+                'BC', 'EOT thr', 'X1', 'X2', 'Y1', 'Y2',
+                'acquisition offset', 'acquisition offset distance',
+                'averaging time', 'front panel offset', 'loss thr',
+                'noise floor level', 'num averages', 'num data points',
+                'number of pulse width entries', 'power offset first point',
+                'refl thr', 'resolution', 'sample spacing', 'trace type',
+                'unit', 'build condition', 'cable code/fiber type',
+                'fiber type', 'language', 'user offset', 'user offset distance',
+                'noise floor scaling factor','acquisition range distance', 'OTDR S/N'
+            ]
+
+            colonnes_a_supprimer_events = [
+                'comments', 'end of curr', 'end of prev', 'peak', 'start of curr', 'start of next', 'Type de ROP'
+            ]
+
+            def convertir_datetime(val):
+                if pd.isna(val):
+                    return val
+                match = re.match(r'^[A-Za-z]{3} ([A-Za-z]{3} \d{1,2} \d{2}:\d{2}:\d{2} \d{4})', str(val))
+                if match:
+                    try:
+                        dt = datetime.strptime(match.group(1), "%b %d %H:%M:%S %Y")
+                        return dt.strftime("%d/%m/%Y %H:%M:%S")
+                    except Exception:
+                        return val
+                return val
+
+            for filename in json_files:
+                try:
+                    filepath = os.path.join(temp_dir, filename)
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    fichier_sor = filename.replace('-dump.json', '.sor')
+                    nom_sor = data.get('filename', fichier_sor)
+                    fxd_params = data.get('FxdParams', {})
+                    gen_params = data.get('GenParams', {})
+                    sup_params = data.get('SupParams', {})
+                    key_events_summary = data.get('KeyEvents', {}).get('Summary', {})
+                    params = {
+                        'Fichier': fichier_sor,
+                        'filename': nom_sor,
+                        'loss end': key_events_summary.get('loss end', None),
+                        **fxd_params,
+                        **gen_params,
+                        **sup_params
+                    }
+                    all_params.append(params)
+                    key_events = data.get('KeyEvents', {})
+                    for key in key_events:
+                        if key.lower().startswith('event '):
+                            event = key_events[key]
+                            event_copy = event.copy()
+                            event_copy['Fichier'] = fichier_sor
+                            event_copy['filename'] = nom_sor
+                            event_copy['Event ID'] = key.split()[1]
+                            all_events.append(event_copy)
+                except Exception as e:
+                    st.error(f"Erreur avec {filename} : {e}")
+
+            df_params = pd.DataFrame(all_params)
+            df_params = df_params.drop(columns=colonnes_a_supprimer_params, errors='ignore')
+            df_params = df_params.rename(columns={
+                'filename': 'MétaNommage',
+                'index': 'Indice de Réfraction',
+                'pulse width': 'Impulsion',
+                'range': 'Portée(km)',
+                'comments': 'Commentaire',
+                'operator': 'Technicien',
+                'software': 'Version',
+                'supplier': 'Fabricant',
+                'acquisition range distance': 'Portée(km)',
+                'wavelength': 'Lambda',
+                'loss end': 'Distance Totale(km)'
+            }, errors='ignore')
+
+            if 'Indice de Réfraction' in df_params.columns:
+                df_params['Indice de Réfraction'] = df_params['Indice de Réfraction'].astype(str).apply(lambda x: x[:6])
+            if 'Distance Totale(km)' in df_params.columns:
+                df_params['Distance Totale(km)'] = pd.to_numeric(df_params['Distance Totale(km)'], errors='coerce').round(3)
+            if 'date/time' in df_params.columns:
+                df_params['date/time'] = df_params['date/time'].apply(convertir_datetime)
+            if 'Portée(km)' in df_params.columns:
+                df_params['Portée(km)'] = pd.to_numeric(df_params['Portée(km)'], errors='coerce').round(0).astype('Int64')
+
+            df_events = pd.DataFrame(all_events)
+            df_events = df_events.drop(columns=colonnes_a_supprimer_events, errors='ignore')
+            df_events = df_events.rename(columns={
+                'filename': 'MétaNommage',
+                'Event ID': 'N° évenement',
+                'refl loss': 'Réfléctance',
+                'distance': 'Distance',
+                'slope': 'Pente',
+                'splice loss': 'Atténuation(dB)',
+                'type': "Type d'évenements"
+            }, errors='ignore')
+
+            remplacement_types = {
+                r'0F9999.*': 'Epissure',
+                r'1E9999.*': 'Fin de fibre',
+                r'1F9999.*': 'Connecteur',
+                r'2E9999.*': 'Fin de fibre',
+                r'0A9999LS.*': 'Epissure',
+                r'1A9999LS.*': 'Connecteur',
+                r'0O99992P.*': 'Epissure',
+                r'1A9999OO.*': 'Connecteur',
+                r'0A9999OO.*': 'Epissure',
+                r'0O9999LS.*': 'Epissure'
+            }
+            if "Type d'évenements" in df_events.columns:
+                df_events["Type d'évenements"] = df_events["Type d'évenements"].replace(remplacement_types, regex=True)
+            if "Type de ROP" in df_events.columns:
+                df_events = df_events.drop(columns=["Type de ROP"])
+            if not df_events.empty:
+                cols = ['Fichier', 'MétaNommage', 'N° évenement'] + [
+                    col for col in df_events.columns if col not in ['Fichier', 'MétaNommage', 'N° évenement']
+                ]
+                df_events = df_events[cols]
+            if "Type d'évenements" in df_events.columns and "Distance" in df_events.columns:
+                last_fin_de_fibre = (
+                    df_events[df_events["Type d'évenements"] == "Fin de fibre"]
+                    .groupby('Fichier')['Distance']
+                    .last()
+                    .reset_index()
+                    .rename(columns={'Distance': 'Distance Totale(km)_new'})
+                )
+                df_params = df_params.merge(last_fin_de_fibre, on='Fichier', how='left')
+                df_params['Distance Totale(km)'] = df_params['Distance Totale(km)_new']
+                df_params = df_params.drop(columns=['Distance Totale(km)_new'])
+
+            df_hors_normes = df_events[
+                (df_events["Type d'évenements"] == "Epissure") &
+                (pd.to_numeric(df_events["Atténuation(dB)"], errors='coerce') >= 0.3)
+            ].copy()
+            df_hors_normes['Anomalie'] = (
+                ((df_hors_normes["Type d'évenements"] == "Epissure") &
+                (pd.to_numeric(df_hors_normes["Atténuation(dB)"], errors='coerce') >= 0.3))
+                .map({True: "Epissure NOK", False: ""})
+            )
+
             step += 1
             progress_bar.progress(step / total_steps)
+            status_text.info("Contrôle Lambda/Indice de Réfraction...")
+            df_hors_normes = controle_lambda_indice(df_params, df_hors_normes)
+            step += 1
+            progress_bar.progress(step / total_steps)
+            status_text.info("Contrôle longueurs fibres (même boîte)...")
+            df_hors_normes = controle_longueur_fibres(df_params, df_hors_normes, tolerance_m=15)
+            step += 1
+            progress_bar.progress(step / total_steps)
+            status_text.info("Contrôle des autres paramètres...")
+            df_hors_normes = controle_parametres(df_params, df_hors_normes, "1.4675", "30")
+            step += 1
+            progress_bar.progress(step / total_steps)
+            status_text.info("Analyse temporelle des fichiers...")
+            df_hors_normes = analyse_temps_mesures(df_params, df_hors_normes)
+            step += 1
+            progress_bar.progress(step / total_steps)
+            status_text.info("Analyse des courbes en doublons...")
+            df_hors_normes = analyser_doublons_courbes(df_params, df_hors_normes)
+            step += 1
+            progress_bar.progress(step / total_steps)
+            status_text.info("Vérification du nommage des courbes...")
+            df_hors_normes = analyser_nommage_courbes(df_params, df_hors_normes)
+            step += 1
+            progress_bar.progress(step / total_steps)
+            status_text.info("Export du rapport Excel...")
 
-        status_text.info("Analyse des fichiers ...")
-        json_files = [f for f in os.listdir(temp_dir) if f.lower().endswith('.json')]
-        all_params = []
-        all_events = []
+            excel_output_path = os.path.join(temp_dir, 'rapport_otdr_final.xlsx')
+            with pd.ExcelWriter(excel_output_path, engine='openpyxl') as writer:
+                df_params.to_excel(writer, sheet_name='Parametres OTDR', index=False)
+                df_events.to_excel(writer, sheet_name='Evenements', index=False)
+                df_hors_normes.to_excel(writer, sheet_name='Hors Normes', index=False)
+                wb = load_workbook(excel_output_path)
+                for ws in wb.worksheets:
+                    for column_cells in ws.columns:
+                        length = max(len(str(cell.value)) if cell.value is not None else 0 for cell in column_cells)
+                        ws.column_dimensions[column_cells[0].column_letter].width = length + 2
+                wb.save(excel_output_path)
+            step += 1
+            progress_bar.progress(step / total_steps)
+            status_text.success("Traitement terminé !")
 
-        colonnes_a_supprimer_params = [
-            'BC', 'EOT thr', 'X1', 'X2', 'Y1', 'Y2',
-            'acquisition offset', 'acquisition offset distance',
-            'averaging time', 'front panel offset', 'loss thr',
-            'noise floor level', 'num averages', 'num data points',
-            'number of pulse width entries', 'power offset first point',
-            'refl thr', 'resolution', 'sample spacing', 'trace type',
-            'unit', 'build condition', 'cable code/fiber type',
-            'fiber type', 'language', 'user offset', 'user offset distance',
-            'noise floor scaling factor','acquisition range distance', 'OTDR S/N'
-        ]
-
-        colonnes_a_supprimer_events = [
-            'comments', 'end of curr', 'end of prev', 'peak', 'start of curr', 'start of next', 'Type de ROP'
-        ]
-
-        def convertir_datetime(val):
-            if pd.isna(val):
-                return val
-            match = re.match(r'^[A-Za-z]{3} ([A-Za-z]{3} \d{1,2} \d{2}:\d{2}:\d{2} \d{4})', str(val))
-            if match:
-                try:
-                    dt = datetime.strptime(match.group(1), "%b %d %H:%M:%S %Y")
-                    return dt.strftime("%d/%m/%Y %H:%M:%S")
-                except Exception:
-                    return val
-            return val
-
-        for filename in json_files:
-            try:
-                filepath = os.path.join(temp_dir, filename)
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                fichier_sor = filename.replace('-dump.json', '.sor')
-                nom_sor = data.get('filename', fichier_sor)
-                fxd_params = data.get('FxdParams', {})
-                gen_params = data.get('GenParams', {})
-                sup_params = data.get('SupParams', {})
-                key_events_summary = data.get('KeyEvents', {}).get('Summary', {})
-                params = {
-                    'Fichier': fichier_sor,
-                    'filename': nom_sor,
-                    'loss end': key_events_summary.get('loss end', None),
-                    **fxd_params,
-                    **gen_params,
-                    **sup_params
-                }
-                all_params.append(params)
-                key_events = data.get('KeyEvents', {})
-                for key in key_events:
-                    if key.lower().startswith('event '):
-                        event = key_events[key]
-                        event_copy = event.copy()
-                        event_copy['Fichier'] = fichier_sor
-                        event_copy['filename'] = nom_sor
-                        event_copy['Event ID'] = key.split()[1]
-                        all_events.append(event_copy)
-            except Exception as e:
-                st.error(f"Erreur avec {filename} : {e}")
-
-        df_params = pd.DataFrame(all_params)
-        df_params = df_params.drop(columns=colonnes_a_supprimer_params, errors='ignore')
-        df_params = df_params.rename(columns={
-            'filename': 'MétaNommage',
-            'index': 'Indice de Réfraction',
-            'pulse width': 'Impulsion',
-            'range': 'Portée(km)',
-            'comments': 'Commentaire',
-            'operator': 'Technicien',
-            'software': 'Version',
-            'supplier': 'Fabricant',
-            'acquisition range distance': 'Portée(km)',
-            'wavelength': 'Lambda',
-            'loss end': 'Distance Totale(km)'
-        }, errors='ignore')
-
-        if 'Indice de Réfraction' in df_params.columns:
-            df_params['Indice de Réfraction'] = df_params['Indice de Réfraction'].astype(str).apply(lambda x: x[:6])
-        if 'Distance Totale(km)' in df_params.columns:
-            df_params['Distance Totale(km)'] = pd.to_numeric(df_params['Distance Totale(km)'], errors='coerce').round(3)
-        if 'date/time' in df_params.columns:
-            df_params['date/time'] = df_params['date/time'].apply(convertir_datetime)
-        if 'Portée(km)' in df_params.columns:
-            df_params['Portée(km)'] = pd.to_numeric(df_params['Portée(km)'], errors='coerce').round(0).astype('Int64')
-
-        df_events = pd.DataFrame(all_events)
-        df_events = df_events.drop(columns=colonnes_a_supprimer_events, errors='ignore')
-        df_events = df_events.rename(columns={
-            'filename': 'MétaNommage',
-            'Event ID': 'N° évenement',
-            'refl loss': 'Réfléctance',
-            'distance': 'Distance',
-            'slope': 'Pente',
-            'splice loss': 'Atténuation(dB)',
-            'type': "Type d'évenements"
-        }, errors='ignore')
-
-        remplacement_types = {
-            r'0F9999.*': 'Epissure',
-            r'1E9999.*': 'Fin de fibre',
-            r'1F9999.*': 'Connecteur',
-            r'2E9999.*': 'Fin de fibre',
-            r'0A9999LS.*': 'Epissure',
-            r'1A9999LS.*': 'Connecteur',
-            r'0O99992P.*': 'Epissure',
-            r'1A9999OO.*': 'Connecteur',
-            r'0A9999OO.*': 'Epissure',
-            r'0O9999LS.*': 'Epissure'
-        }
-        if "Type d'évenements" in df_events.columns:
-            df_events["Type d'évenements"] = df_events["Type d'évenements"].replace(remplacement_types, regex=True)
-        if "Type de ROP" in df_events.columns:
-            df_events = df_events.drop(columns=["Type de ROP"])
-        if not df_events.empty:
-            cols = ['Fichier', 'MétaNommage', 'N° évenement'] + [
-                col for col in df_events.columns if col not in ['Fichier', 'MétaNommage', 'N° évenement']
-            ]
-            df_events = df_events[cols]
-        if "Type d'évenements" in df_events.columns and "Distance" in df_events.columns:
-            last_fin_de_fibre = (
-                df_events[df_events["Type d'évenements"] == "Fin de fibre"]
-                .groupby('Fichier')['Distance']
-                .last()
-                .reset_index()
-                .rename(columns={'Distance': 'Distance Totale(km)_new'})
-            )
-            df_params = df_params.merge(last_fin_de_fibre, on='Fichier', how='left')
-            df_params['Distance Totale(km)'] = df_params['Distance Totale(km)_new']
-            df_params = df_params.drop(columns=['Distance Totale(km)_new'])
-
-        df_hors_normes = df_events[
-            (df_events["Type d'évenements"] == "Epissure") &
-            (pd.to_numeric(df_events["Atténuation(dB)"], errors='coerce') >= 0.3)
-        ].copy()
-        df_hors_normes['Anomalie'] = (
-            ((df_hors_normes["Type d'évenements"] == "Epissure") &
-            (pd.to_numeric(df_hors_normes["Atténuation(dB)"], errors='coerce') >= 0.3))
-            .map({True: "Epissure NOK", False: ""})
-        )
-
-        step += 1
-        progress_bar.progress(step / total_steps)
-        status_text.info("Contrôle Lambda/Indice de Réfraction...")
-        df_hors_normes = controle_lambda_indice(df_params, df_hors_normes)
-        step += 1
-        progress_bar.progress(step / total_steps)
-        status_text.info("Contrôle longueurs fibres (même boîte)...")
-        df_hors_normes = controle_longueur_fibres(df_params, df_hors_normes, tolerance_m=15)
-        step += 1
-        progress_bar.progress(step / total_steps)
-        status_text.info("Contrôle des autres paramètres...")
-        df_hors_normes = controle_parametres(df_params, df_hors_normes, "1.4675", "30")
-        step += 1
-        progress_bar.progress(step / total_steps)
-        status_text.info("Analyse temporelle des fichiers...")
-        df_hors_normes = analyse_temps_mesures(df_params, df_hors_normes)
-        step += 1
-        progress_bar.progress(step / total_steps)
-        status_text.info("Analyse des courbes en doublons...")
-        df_hors_normes = analyser_doublons_courbes(df_params, df_hors_normes)
-        step += 1
-        progress_bar.progress(step / total_steps)
-        status_text.info("Vérification du nommage des courbes...")
-        df_hors_normes = analyser_nommage_courbes(df_params, df_hors_normes)
-        step += 1
-        progress_bar.progress(step / total_steps)
-        status_text.info("Export du rapport Excel...")
-
-        excel_output_path = os.path.join(temp_dir, 'rapport_otdr_final.xlsx')
-        with pd.ExcelWriter(excel_output_path, engine='openpyxl') as writer:
-            df_params.to_excel(writer, sheet_name='Parametres OTDR', index=False)
-            df_events.to_excel(writer, sheet_name='Evenements', index=False)
-            df_hors_normes.to_excel(writer, sheet_name='Hors Normes', index=False)
-            wb = load_workbook(excel_output_path)
-            for ws in wb.worksheets:
-                for column_cells in ws.columns:
-                    length = max(len(str(cell.value)) if cell.value is not None else 0 for cell in column_cells)
-                    ws.column_dimensions[column_cells[0].column_letter].width = length + 2
-            wb.save(excel_output_path)
-        step += 1
-        progress_bar.progress(step / total_steps)
-        status_text.success("Traitement terminé !")
-
-        with open(excel_output_path, "rb") as f:
-            st.download_button("Télécharger le rapport Excel", f, file_name="rapport_otdr_final.xlsx")
+            with open(excel_output_path, "rb") as f:
+                st.download_button("Télécharger le rapport Excel", f, file_name="rapport_otdr_final.xlsx")
     except Exception as e:
         st.error(f"Erreur inattendue : {e}")
 
