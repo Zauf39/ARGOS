@@ -403,7 +403,7 @@ def traitement_otdr(indice_ref, impulsion_ref, sor_files):
                 'distance': 'Distance',
                 'slope': 'Pente',
                 'splice loss': 'Atténuation(dB)',
-                'type': "Type evenements"
+                
             }, errors='ignore')
 
             remplacement_types = {
@@ -418,26 +418,7 @@ def traitement_otdr(indice_ref, impulsion_ref, sor_files):
                 r'0A9999OO.*': 'Epissure',
                 r'0O9999LS.*': 'Epissure'
             }
-            if "Type evenements" in df_events.columns:
-                df_events["Type evenements"] = df_events["Type evenements"].replace(remplacement_types, regex=True)
-            if "Type de ROP" in df_events.columns:
-                df_events = df_events.drop(columns=["Type de ROP"])
-            if not df_events.empty:
-                cols = ['Fichier', 'MétaNommage', 'N° évenement'] + [
-                    col for col in df_events.columns if col not in ['Fichier', 'MétaNommage', 'N° évenement']
-                ]
-                df_events = df_events[cols]
-            if "Type evenements" in df_events.columns and "Distance" in df_events.columns:
-                last_fin_de_fibre = (
-                    df_events[df_events["Type evenements"] == "Fin de fibre"]
-                    .groupby('Fichier')['Distance']
-                    .last()
-                    .reset_index()
-                    .rename(columns={'Distance': 'Distance Totale(km)_new'})
-                )
-                df_params = df_params.merge(last_fin_de_fibre, on='Fichier', how='left')
-                df_params['Distance Totale(km)'] = df_params['Distance Totale(km)_new']
-                df_params = df_params.drop(columns=['Distance Totale(km)_new'])
+            
 
             df_hors_normes = df_events[
                 (df_events["Type evenements"] == "Epissure") &
