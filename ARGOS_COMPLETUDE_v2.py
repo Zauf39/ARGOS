@@ -2,13 +2,11 @@ import os
 import subprocess
 import json
 from datetime import datetime, timedelta
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
 import pandas as pd
 import re
 from openpyxl import load_workbook
-import threading
 import sys
+import streamlit as st
 
 def flatten_json(y):
     out = {}
@@ -149,7 +147,7 @@ def controle_parametres(df_params, df_hors_normes, indice_ref, impulsion_ref):
             if col not in colonnes_hn:
                 df_hors_normes[col] = ""
         df_hors_normes = pd.concat([df_hors_normes, df_anomalies], ignore_index=True)
-        messagebox.showinfo("Contrôle terminé", f"{len(lignes_anomalies)} anomalies paramètre ajoutées dans 'Hors Normes'.")
+        st.info(f"{len(lignes_anomalies)} anomalies paramètre ajoutées dans 'Hors Normes'.")
     return df_hors_normes
 
 def analyse_temps_mesures(df_params, df_hors_normes):
@@ -233,7 +231,7 @@ def analyser_doublons_courbes(df_params, df_hors_normes):
             if col not in colonnes_hn:
                 df_hors_normes[col] = ""
         df_hors_normes = pd.concat([df_hors_normes, df_anomalies_doublons], ignore_index=True)
-        messagebox.showinfo("Analyse doublons", f"{len(anomalies_doublons)} courbes en doublons détectées.")
+        st.info(f"{len(anomalies_doublons)} courbes en doublons détectées.")
     return df_hors_normes
 
 def analyser_nommage_courbes(df_params, df_hors_normes):
@@ -257,43 +255,52 @@ def analyser_nommage_courbes(df_params, df_hors_normes):
             if col not in colonnes_hn:
                 df_hors_normes[col] = ""
         df_hors_normes = pd.concat([df_hors_normes, df_anomalies_nommage], ignore_index=True)
-        messagebox.showinfo("Analyse nommage", f"{len(anomalies_nommage)} erreurs de nommage détectées.")
+        st.info(f"{len(anomalies_nommage)} erreurs de nommage détectées.")
     return df_hors_normes
 
-def traitement_otdr(indice_ref, impulsion_ref, root, progress, status_label):
+def traitement_otdr(indice_ref, impulsion_ref, sor_files):
+    # Affichage de la progression
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     try:
-        sor_files = filedialog.askopenfilenames(
-            title="Sélectionner les fichiers .sor",
-            filetypes=[("Fichiers SOR", "*.sor")]
-        )
         if not sor_files:
-            messagebox.showerror("Erreur", "Aucun fichier sélectionné.")
-            root.destroy()
+            st.error("Aucun fichier sélectionné.")
             return
-        sor_directory = os.path.dirname(sor_files[0])
+
+        # Création d'un dossier temporaire
+        temp_dir = os.path.dirname(sor_files[0].name)
         nb_fichiers = len(sor_files)
         total_steps = nb_fichiers + 8
-        progress['maximum'] = total_steps
-        progress['value'] = 0
-        status_label['text'] = "Conversion des fichiers .sor..."
+        step = 0
+
+        # Sauvegarde des fichiers uploadés
+        sor_file_paths = []
+        for uploaded_file in sor_files:
+            file_path = os.path.join(temp_dir, uploaded_file.name)
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            sor_file_paths.append(file_path)
+
+        status_text.info("Conversion des fichiers .sor...")
         flags = 0
         if sys.platform == "win32":
             flags = subprocess.CREATE_NO_WINDOW
-        for i, sor_file in enumerate(sor_files):
+
+        for i, sor_file in enumerate(sor_file_paths):
             sor_filename = os.path.basename(sor_file)
-            status_label['text'] = f"Conversion : {sor_filename}"
-            root.update_idletasks()
+            status_text.info(f"Conversion : {sor_filename}")
             try:
-                subprocess.run(['pyotdr', sor_filename], cwd=sor_directory, check=True, creationflags=flags)
+                subprocess.run(['pyotdr', sor_filename], cwd=temp_dir, check=True, creationflags=flags)
             except Exception as e:
-                print(f"❌ Erreur sur {sor_filename} : {e}")
-            progress['value'] += 1
-            root.update_idletasks()
-        status_label['text'] = "Analyse des fichiers ..."
-        root.update_idletasks()
-        json_files = [f for f in os.listdir(sor_directory) if f.lower().endswith('.json')]
+                st.error(f"❌ Erreur sur {sor_filename} : {e}")
+            step += 1
+            progress_bar.progress(step / total_steps)
+
+        status_text.info("Analyse des fichiers ...")
+        json_files = [f for f in os.listdir(temp_dir) if f.lower().endswith('.json')]
         all_params = []
         all_events = []
+
         colonnes_a_supprimer_params = [
             'BC', 'EOT thr', 'X1', 'X2', 'Y1', 'Y2',
             'acquisition offset', 'acquisition offset distance',
@@ -305,9 +312,11 @@ def traitement_otdr(indice_ref, impulsion_ref, root, progress, status_label):
             'fiber type', 'language', 'user offset', 'user offset distance',
             'noise floor scaling factor','acquisition range distance', 'OTDR S/N'
         ]
+
         colonnes_a_supprimer_events = [
             'comments', 'end of curr', 'end of prev', 'peak', 'start of curr', 'start of next', 'Type de ROP'
         ]
+
         def convertir_datetime(val):
             if pd.isna(val):
                 return val
@@ -319,9 +328,10 @@ def traitement_otdr(indice_ref, impulsion_ref, root, progress, status_label):
                 except Exception:
                     return val
             return val
+
         for filename in json_files:
             try:
-                filepath = os.path.join(sor_directory, filename)
+                filepath = os.path.join(temp_dir, filename)
                 with open(filepath, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 fichier_sor = filename.replace('-dump.json', '.sor')
@@ -349,7 +359,8 @@ def traitement_otdr(indice_ref, impulsion_ref, root, progress, status_label):
                         event_copy['Event ID'] = key.split()[1]
                         all_events.append(event_copy)
             except Exception as e:
-                print(f"Erreur avec {filename} : {e}")
+                st.error(f"Erreur avec {filename} : {e}")
+
         df_params = pd.DataFrame(all_params)
         df_params = df_params.drop(columns=colonnes_a_supprimer_params, errors='ignore')
         df_params = df_params.rename(columns={
@@ -365,6 +376,7 @@ def traitement_otdr(indice_ref, impulsion_ref, root, progress, status_label):
             'wavelength': 'Lambda',
             'loss end': 'Distance Totale(km)'
         }, errors='ignore')
+
         if 'Indice de Réfraction' in df_params.columns:
             df_params['Indice de Réfraction'] = df_params['Indice de Réfraction'].astype(str).apply(lambda x: x[:6])
         if 'Distance Totale(km)' in df_params.columns:
@@ -373,6 +385,7 @@ def traitement_otdr(indice_ref, impulsion_ref, root, progress, status_label):
             df_params['date/time'] = df_params['date/time'].apply(convertir_datetime)
         if 'Portée(km)' in df_params.columns:
             df_params['Portée(km)'] = pd.to_numeric(df_params['Portée(km)'], errors='coerce').round(0).astype('Int64')
+
         df_events = pd.DataFrame(all_events)
         df_events = df_events.drop(columns=colonnes_a_supprimer_events, errors='ignore')
         df_events = df_events.rename(columns={
@@ -384,6 +397,7 @@ def traitement_otdr(indice_ref, impulsion_ref, root, progress, status_label):
             'splice loss': 'Atténuation(dB)',
             'type': "Type d'évenements"
         }, errors='ignore')
+
         remplacement_types = {
             r'0F9999.*': 'Epissure',
             r'1E9999.*': 'Fin de fibre',
@@ -398,11 +412,9 @@ def traitement_otdr(indice_ref, impulsion_ref, root, progress, status_label):
         }
         if "Type d'évenements" in df_events.columns:
             df_events["Type d'évenements"] = df_events["Type d'évenements"].replace(remplacement_types, regex=True)
-        # Suppression explicite de la colonne "Type de ROP" si elle existe encore
         if "Type de ROP" in df_events.columns:
             df_events = df_events.drop(columns=["Type de ROP"])
         if not df_events.empty:
-            # On ne met pas "Type de ROP" dans l'ordre des colonnes
             cols = ['Fichier', 'MétaNommage', 'N° évenement'] + [
                 col for col in df_events.columns if col not in ['Fichier', 'MétaNommage', 'N° évenement']
             ]
@@ -418,91 +430,71 @@ def traitement_otdr(indice_ref, impulsion_ref, root, progress, status_label):
             df_params = df_params.merge(last_fin_de_fibre, on='Fichier', how='left')
             df_params['Distance Totale(km)'] = df_params['Distance Totale(km)_new']
             df_params = df_params.drop(columns=['Distance Totale(km)_new'])
+
         df_hors_normes = df_events[
             (df_events["Type d'évenements"] == "Epissure") &
             (pd.to_numeric(df_events["Atténuation(dB)"], errors='coerce') >= 0.3)
         ].copy()
         df_hors_normes['Anomalie'] = (
             ((df_hors_normes["Type d'évenements"] == "Epissure") &
-             (pd.to_numeric(df_hors_normes["Atténuation(dB)"], errors='coerce') >= 0.3))
+            (pd.to_numeric(df_hors_normes["Atténuation(dB)"], errors='coerce') >= 0.3))
             .map({True: "Epissure NOK", False: ""})
         )
-        progress['value'] += 1
-        root.update_idletasks()
-        status_label['text'] = "Contrôle Lambda/Indice de Réfraction..."
-        root.update_idletasks()
+
+        step += 1
+        progress_bar.progress(step / total_steps)
+        status_text.info("Contrôle Lambda/Indice de Réfraction...")
         df_hors_normes = controle_lambda_indice(df_params, df_hors_normes)
-        progress['value'] += 1
-        root.update_idletasks()
-        status_label['text'] = "Contrôle longueurs fibres (même boîte)..."
-        root.update_idletasks()
+        step += 1
+        progress_bar.progress(step / total_steps)
+        status_text.info("Contrôle longueurs fibres (même boîte)...")
         df_hors_normes = controle_longueur_fibres(df_params, df_hors_normes, tolerance_m=15)
-        progress['value'] += 1
-        root.update_idletasks()
-        status_label['text'] = "Contrôle des autres paramètres..."
-        root.update_idletasks()
+        step += 1
+        progress_bar.progress(step / total_steps)
+        status_text.info("Contrôle des autres paramètres...")
         df_hors_normes = controle_parametres(df_params, df_hors_normes, "1.4675", "30")
-        progress['value'] += 1
-        root.update_idletasks()
-        status_label['text'] = "Analyse temporelle des fichiers..."
-        root.update_idletasks()
+        step += 1
+        progress_bar.progress(step / total_steps)
+        status_text.info("Analyse temporelle des fichiers...")
         df_hors_normes = analyse_temps_mesures(df_params, df_hors_normes)
-        progress['value'] += 1
-        root.update_idletasks()
-        status_label['text'] = "Analyse des courbes en doublons..."
-        root.update_idletasks()
+        step += 1
+        progress_bar.progress(step / total_steps)
+        status_text.info("Analyse des courbes en doublons...")
         df_hors_normes = analyser_doublons_courbes(df_params, df_hors_normes)
-        progress['value'] += 1
-        root.update_idletasks()
-        status_label['text'] = "Vérification du nommage des courbes..."
-        root.update_idletasks()
+        step += 1
+        progress_bar.progress(step / total_steps)
+        status_text.info("Vérification du nommage des courbes...")
         df_hors_normes = analyser_nommage_courbes(df_params, df_hors_normes)
-        progress['value'] += 1
-        root.update_idletasks()
-        status_label['text'] = "Export du rapport Excel..."
-        root.update_idletasks()
-        excel_output_path = os.path.join(sor_directory, 'rapport_otdr_final.xlsx')
+        step += 1
+        progress_bar.progress(step / total_steps)
+        status_text.info("Export du rapport Excel...")
+
+        excel_output_path = os.path.join(temp_dir, 'rapport_otdr_final.xlsx')
         with pd.ExcelWriter(excel_output_path, engine='openpyxl') as writer:
             df_params.to_excel(writer, sheet_name='Parametres OTDR', index=False)
             df_events.to_excel(writer, sheet_name='Evenements', index=False)
             df_hors_normes.to_excel(writer, sheet_name='Hors Normes', index=False)
-        wb = load_workbook(excel_output_path)
-        for ws in wb.worksheets:
-            for column_cells in ws.columns:
-                length = max(len(str(cell.value)) if cell.value is not None else 0 for cell in column_cells)
-                ws.column_dimensions[column_cells[0].column_letter].width = length + 2
-        wb.save(excel_output_path)
-        progress['value'] += 1
-        root.update_idletasks()
-        status_label['text'] = "Traitement terminé !"
-        messagebox.showinfo("Succès", f"Export OTDR terminé avec succès.\n\nFichier : {excel_output_path}")
-        root.quit()
+            wb = load_workbook(excel_output_path)
+            for ws in wb.worksheets:
+                for column_cells in ws.columns:
+                    length = max(len(str(cell.value)) if cell.value is not None else 0 for cell in column_cells)
+                    ws.column_dimensions[column_cells[0].column_letter].width = length + 2
+            wb.save(excel_output_path)
+        step += 1
+        progress_bar.progress(step / total_steps)
+        status_text.success("Traitement terminé !")
+
+        with open(excel_output_path, "rb") as f:
+            st.download_button("Télécharger le rapport Excel", f, file_name="rapport_otdr_final.xlsx")
     except Exception as e:
-        progress.stop()
-        messagebox.showerror("Erreur", f"Erreur inattendue : {e}")
-        root.quit()
-    finally:
-        if 'sor_directory' in locals() and sor_directory:
-            for ext in ('.json', '.dat'):
-                for file in os.listdir(sor_directory):
-                    if file.lower().endswith(ext):
-                        try:
-                            os.remove(os.path.join(sor_directory, file))
-                            print(f"Fichier supprimé : {file}")
-                        except Exception as e:
-                            print(f"Erreur lors de la suppression de {file} : {e}")
+        st.error(f"Erreur inattendue : {e}")
+
+def main():
+    st.title("Analyse OTDR - Version Streamlit")
+    st.write("Déposez vos fichiers .sor pour lancer l'analyse.")
+    sor_files = st.file_uploader("Sélectionner les fichiers .sor", accept_multiple_files=True, type="sor")
+    if sor_files and st.button("Lancer l'analyse"):
+        traitement_otdr("1.4675", "30", sor_files)
 
 if __name__ == "__main__":
-    indice_ref, impulsion_ref = "1.4675", "30"
-    root = tk.Tk()
-    root.title("Analyse OTDR en cours")
-    status_label = tk.Label(root, text="En attente de sélection des fichiers...")
-    status_label.pack(pady=(10, 0))
-    progress = ttk.Progressbar(root, mode='determinate', length=300)
-    progress.pack(pady=20)
-    thread = threading.Thread(
-        target=traitement_otdr,
-        args=(indice_ref, impulsion_ref, root, progress, status_label)
-    )
-    thread.start()
-    root.mainloop()
+    main()
