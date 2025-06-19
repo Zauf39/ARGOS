@@ -1,19 +1,9 @@
-import sys
-import subprocess
-
-# Installation automatique de openpyxl si besoin
-try:
-    import openpyxl
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl"])
-    import openpyxl
-from openpyxl import load_workbook
-
 import os
 import json
 from datetime import datetime, timedelta
 import pandas as pd
 import re
+from openpyxl import load_workbook
 import streamlit as st
 
 def flatten_json(y):
@@ -287,14 +277,16 @@ def traitement_otdr(indice_ref, impulsion_ref, sor_files):
             sor_file_paths.append(file_path)
 
         status_text.info("Conversion des fichiers .sor...")
+        import sys
         flags = 0
         if sys.platform == "win32":
-            flags = subprocess.CREATE_NO_WINDOW
+            flags = 0x08000000  # subprocess.CREATE_NO_WINDOW
 
         for i, sor_file in enumerate(sor_file_paths):
             sor_filename = os.path.basename(sor_file)
             status_text.info(f"Conversion : {sor_filename}")
             try:
+                import subprocess
                 subprocess.run(['pyotdr', sor_filename], cwd=temp_dir, check=True, creationflags=flags)
             except Exception as e:
                 st.error(f"❌ Erreur sur {sor_filename} : {e}")
