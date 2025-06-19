@@ -46,79 +46,7 @@ def convertir_datetime(val):
             return val
     return val
 
-def controle_lambda_indice(df_params, df_hors_normes):
-    anomalies = []
-    for _, row in df_params.iterrows():
-        lambda_val = str(row.get('Lambda', '')).lower().replace('nm', '').replace(' ', '').replace('\xa0', '')
-        indice_val = str(row.get('Indice de Réfraction', '')).replace(',', '.').strip()
-        try:
-            indice_float = round(float(indice_val), 4)
-        except Exception:
-            indice_float = None
-        if lambda_val == "1310":
-            if indice_float is None or abs(indice_float - 1.4675) > 0.0001:
-                anomalies.append({
-                    'Fichier': row.get('Fichier', ''),
-                    'MétaNommage': row.get('MétaNommage', ''),
-                    'Indice de Réfraction': row.get('Indice de Réfraction', ''),
-                    'Impulsion': row.get('Impulsion', ''),
-                    'Lambda': row.get('Lambda', ''),
-                    'Anomalie': "Indice de Réfraction NOK"
-                })
-        if lambda_val == "1550":
-            if indice_float is None or abs(indice_float - 1.4680) > 0.0001:
-                anomalies.append({
-                    'Fichier': row.get('Fichier', ''),
-                    'MétaNommage': row.get('MétaNommage', ''),
-                    'Indice de Réfraction': row.get('Indice de Réfraction', ''),
-                    'Impulsion': row.get('Impulsion', ''),
-                    'Lambda': row.get('Lambda', ''),
-                    'Anomalie': "Indice de Réfraction NOK"
-                })
-    if anomalies:
-        df_anomalies = pd.DataFrame(anomalies)
-        colonnes_hn = list(df_hors_normes.columns)
-        for col in df_anomalies.columns:
-            if col not in colonnes_hn:
-                df_hors_normes[col] = ""
-        df_hors_normes = pd.concat([df_hors_normes, df_anomalies], ignore_index=True)
-    return df_hors_normes
 
-def controle_longueur_fibres(df_params, df_hors_normes, tolerance_m=30):
-    anomalies = []
-    tolerance_km = tolerance_m / 1000.0
-    if 'Distance Totale(km)' in df_params.columns:
-        df_params['Distance Totale(km)'] = pd.to_numeric(df_params['Distance Totale(km)'], errors='coerce')
-    if 'cable ID' in df_params.columns:
-        df_params['cable ID'] = df_params['cable ID'].astype(str).str.strip()
-    for cable_id, group in df_params.groupby('cable ID'):
-        if pd.isna(cable_id) or cable_id == '' or group['Distance Totale(km)'].isnull().all():
-            continue
-        dists = group['Distance Totale(km)'].dropna().astype(float)
-        if len(dists) < 2:
-            continue
-        min_dist = dists.min()
-        max_dist = dists.max()
-        if (max_dist - min_dist) > tolerance_km:
-            for idx, row in group.iterrows():
-                anomalies.append({
-                    'Fichier': row.get('Fichier', ''),
-                    'MétaNommage': row.get('MétaNommage', ''),
-                    'Indice de Réfraction': row.get('Indice de Réfraction', ''),
-                    'Impulsion': row.get('Impulsion', ''),
-                    'Lambda': row.get('Lambda', ''),
-                    'cable ID': row.get('cable ID', ''),
-                    'Distance Totale(km)': row.get('Distance Totale(km)', ''),
-                    'Anomalie': "Longueurs d'une même fibres NOK"
-                })
-    if anomalies:
-        df_anomalies = pd.DataFrame(anomalies)
-        colonnes_hn = list(df_hors_normes.columns)
-        for col in df_anomalies.columns:
-            if col not in colonnes_hn:
-                df_hors_normes[col] = ""
-        df_hors_normes = pd.concat([df_hors_normes, df_anomalies], ignore_index=True)
-    return df_hors_normes
 
 def controle_parametres(df_params, df_hors_normes, indice_ref, impulsion_ref):
     lignes_anomalies = []
