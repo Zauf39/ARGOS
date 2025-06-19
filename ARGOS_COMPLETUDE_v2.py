@@ -1,11 +1,19 @@
-import os
+import sys
 import subprocess
+
+# Installation automatique de openpyxl si besoin
+try:
+    import openpyxl
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl"])
+    import openpyxl
+from openpyxl import load_workbook
+
+import os
 import json
 from datetime import datetime, timedelta
 import pandas as pd
 import re
-from openpyxl import load_workbook
-import sys
 import streamlit as st
 
 def flatten_json(y):
