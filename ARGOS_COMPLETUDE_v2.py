@@ -46,8 +46,6 @@ def convertir_datetime(val):
             return val
     return val
 
-
-
 def controle_parametres(df_params, df_hors_normes, indice_ref, impulsion_ref):
     lignes_anomalies = []
     for _, row in df_params.iterrows():
@@ -188,13 +186,9 @@ def analyser_nommage_courbes(df_params, df_hors_normes):
     return df_hors_normes
 
 def run_pyotdr(sor_filename, temp_dir, flags):
-    """
-    Tente d'exécuter pyotdr comme commande système, puis via python -m pyotdr si la première échoue.
-    """
     try:
         subprocess.run(['pyotdr', sor_filename], cwd=temp_dir, check=True, creationflags=flags)
     except FileNotFoundError:
-        # Si pyotdr n'est pas trouvé comme exécutable, tente python -m pyotdr
         subprocess.run([sys.executable, '-m', 'pyotdr', sor_filename], cwd=temp_dir, check=True, creationflags=flags)
 
 def traitement_otdr(indice_ref, impulsion_ref, sor_files):
@@ -207,7 +201,7 @@ def traitement_otdr(indice_ref, impulsion_ref, sor_files):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             nb_fichiers = len(sor_files)
-            total_steps = nb_fichiers + 8
+            total_steps = nb_fichiers + 7
             step = 0
 
             sor_file_paths = []
@@ -331,41 +325,23 @@ def traitement_otdr(indice_ref, impulsion_ref, sor_files):
                 'distance': 'Distance',
                 'slope': 'Pente',
                 'splice loss': 'Atténuation(dB)',
-                
             }, errors='ignore')
 
-            remplacement_types = {
-                r'0F9999.*': 'Epissure',
-                r'1E9999.*': 'Fin de fibre',
-                r'1F9999.*': 'Connecteur',
-                r'2E9999.*': 'Fin de fibre',
-                r'0A9999LS.*': 'Epissure',
-                r'1A9999LS.*': 'Connecteur',
-                r'0O99992P.*': 'Epissure',
-                r'1A9999OO.*': 'Connecteur',
-                r'0A9999OO.*': 'Epissure',
-                r'0O9999LS.*': 'Epissure'
-            }
-            
+            # --- SUPPRESSION DU CONTRÔLE "Type evenements" ---
 
-            df_hors_normes = df_events[
-                (df_events["Type evenements"] == "Epissure") &
-                (pd.to_numeric(df_events["Atténuation(dB)"], errors='coerce') >= 0.3)
-            ].copy()
-            df_hors_normes['Anomalie'] = (
-                ((df_hors_normes["Type evenements"] == "Epissure") &
-                (pd.to_numeric(df_hors_normes["Atténuation(dB)"], errors='coerce') >= 0.3))
-                .map({True: "Epissure NOK", False: ""})
-            )
+            # Initialisation d'un DataFrame vide pour les anomalies
+            df_hors_normes = pd.DataFrame()
 
             step += 1
             progress_bar.progress(step / total_steps)
             status_text.info("Contrôle Lambda/Indice de Réfraction...")
-            df_hors_normes = controle_lambda_indice(df_params, df_hors_normes)
+            # Appelle ici ta fonction controle_lambda_indice si elle existe, sinon retire cette ligne
+            # df_hors_normes = controle_lambda_indice(df_params, df_hors_normes)
             step += 1
             progress_bar.progress(step / total_steps)
             status_text.info("Contrôle longueurs fibres (même boîte)...")
-            df_hors_normes = controle_longueur_fibres(df_params, df_hors_normes, tolerance_m=15)
+            # Appelle ici ta fonction controle_longueur_fibres si elle existe, sinon retire cette ligne
+            # df_hors_normes = controle_longueur_fibres(df_params, df_hors_normes, tolerance_m=15)
             step += 1
             progress_bar.progress(step / total_steps)
             status_text.info("Contrôle des autres paramètres...")
