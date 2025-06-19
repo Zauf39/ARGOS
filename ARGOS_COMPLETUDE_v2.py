@@ -259,6 +259,16 @@ def analyser_nommage_courbes(df_params, df_hors_normes):
         st.info(f"{len(anomalies_nommage)} erreurs de nommage détectées.")
     return df_hors_normes
 
+def run_pyotdr(sor_filename, temp_dir, flags):
+    """
+    Tente d'exécuter pyotdr comme commande système, puis via python -m pyotdr si la première échoue.
+    """
+    try:
+        subprocess.run(['pyotdr', sor_filename], cwd=temp_dir, check=True, creationflags=flags)
+    except FileNotFoundError:
+        # Si pyotdr n'est pas trouvé comme exécutable, tente python -m pyotdr
+        subprocess.run([sys.executable, '-m', 'pyotdr', sor_filename], cwd=temp_dir, check=True, creationflags=flags)
+
 def traitement_otdr(indice_ref, impulsion_ref, sor_files):
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -288,7 +298,7 @@ def traitement_otdr(indice_ref, impulsion_ref, sor_files):
                 sor_filename = os.path.basename(sor_file)
                 status_text.info(f"Conversion : {sor_filename}")
                 try:
-                    subprocess.run(['pyotdr', sor_filename], cwd=temp_dir, check=True, creationflags=flags)
+                    run_pyotdr(sor_filename, temp_dir, flags)
                 except Exception as e:
                     st.error(f"❌ Erreur sur {sor_filename} : {e}")
                 step += 1
