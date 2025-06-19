@@ -403,7 +403,7 @@ def traitement_otdr(indice_ref, impulsion_ref, sor_files):
                 'distance': 'Distance',
                 'slope': 'Pente',
                 'splice loss': 'Atténuation(dB)',
-                'type': "Type d'évenements"
+                'type': "Type evenements"
             }, errors='ignore')
 
             remplacement_types = {
@@ -418,8 +418,8 @@ def traitement_otdr(indice_ref, impulsion_ref, sor_files):
                 r'0A9999OO.*': 'Epissure',
                 r'0O9999LS.*': 'Epissure'
             }
-            if "Type d'évenements" in df_events.columns:
-                df_events["Type d'évenements"] = df_events["Type d'évenements"].replace(remplacement_types, regex=True)
+            if "Type evenements" in df_events.columns:
+                df_events["Type evenements"] = df_events["Type evenements"].replace(remplacement_types, regex=True)
             if "Type de ROP" in df_events.columns:
                 df_events = df_events.drop(columns=["Type de ROP"])
             if not df_events.empty:
@@ -427,9 +427,9 @@ def traitement_otdr(indice_ref, impulsion_ref, sor_files):
                     col for col in df_events.columns if col not in ['Fichier', 'MétaNommage', 'N° évenement']
                 ]
                 df_events = df_events[cols]
-            if "Type d'évenements" in df_events.columns and "Distance" in df_events.columns:
+            if "Type evenements" in df_events.columns and "Distance" in df_events.columns:
                 last_fin_de_fibre = (
-                    df_events[df_events["Type d'évenements"] == "Fin de fibre"]
+                    df_events[df_events["Type evenements"] == "Fin de fibre"]
                     .groupby('Fichier')['Distance']
                     .last()
                     .reset_index()
@@ -440,11 +440,11 @@ def traitement_otdr(indice_ref, impulsion_ref, sor_files):
                 df_params = df_params.drop(columns=['Distance Totale(km)_new'])
 
             df_hors_normes = df_events[
-                (df_events["Type d'évenements"] == "Epissure") &
+                (df_events["Type evenements"] == "Epissure") &
                 (pd.to_numeric(df_events["Atténuation(dB)"], errors='coerce') >= 0.3)
             ].copy()
             df_hors_normes['Anomalie'] = (
-                ((df_hors_normes["Type d'évenements"] == "Epissure") &
+                ((df_hors_normes["Type evenements"] == "Epissure") &
                 (pd.to_numeric(df_hors_normes["Atténuation(dB)"], errors='coerce') >= 0.3))
                 .map({True: "Epissure NOK", False: ""})
             )
